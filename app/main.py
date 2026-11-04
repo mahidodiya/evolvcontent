@@ -1,31 +1,35 @@
-from contextlib import asynccontextmanager
+import asyncio
+
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
 from app.core.config import settings
-
-from app.messaging.redis_client import (
-    connect_redis,
-    close_redis
-)
-
-from app.messaging.stream_manager import (
-    initialize_request_stream
-)
-from app.messaging.consumer import consume_messages
-
+from app.workers.moderation_worker import run_worker
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    await connect_redis()
+    # Start Redis moderation worker
+    worker_task = asyncio.create_task(
+        run_worker(),
+        name="evolv-moderation-worker"
+    )
 
-    await initialize_request_stream()
+    print("EVOLV moderation worker started.")
 
     yield
 
-    await close_redis()
+    # Gracefully stop worker during application shutdown
+    print("Shutting down EVOLV moderation worker...")
+
+    worker_task.cancel()
+
+    with suppress(asyncio.CancelledError):
+        await worker_task
+
+    print("EVOLV moderation worker stopped.")
 
 
 app = FastAPI(
@@ -34,13 +38,6 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
-
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "service": "EVOLV AI Moderation Service"
-    }
 
 
 @app.get("/")
@@ -56,15 +53,6 @@ async def root():
 async def health_check():
 
     return {
-        "status": "healthy"
-    }
-
-@app.get("/test/redis-consumer")
-async def test_redis_consumer():
-
-    messages = await consume_messages()
-
-    return {
-        "total_messages": len(messages),
-        "messages": messages
+        "status": "healthy",
+        "service": "EVOLV AI Moderation Service"
     }
